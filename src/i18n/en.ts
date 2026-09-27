@@ -63,8 +63,8 @@ export const enTranslations: Translations = {
   SKIP_IMAGES_DESC: 'Exclude image resources when syncing to avoid polluting your vault',
   SYNC_DAYS_LIMIT_NAME: 'Sync Days Limit',
   SYNC_DAYS_LIMIT_DESC: 'Only sync memos from the last N days (0 = no limit)',
-  PROFILE_BIDIRECTIONAL_SYNC_LABEL: 'Push local changes back',
-  PROFILE_BIDIRECTIONAL_SYNC_DESC: 'When you edit a memo’s line in this daily note (text or checkbox), push that change back to this Memos server. If the same memo was also edited in Memos since the last sync, you’ll be asked which version to keep. Off by default: unlike the rest of this plugin, this writes to your server. Only single-line memos with no attachments can be pushed.',
+  PROFILE_BIDIRECTIONAL_SYNC_LABEL: 'Bidirectional sync',
+  PROFILE_BIDIRECTIONAL_SYNC_DESC: 'For single-line memos with no attachments: push a local edit (text or checkbox) back to this Memos server, and let a genuine remote-side change overwrite the local line on pull instead of always keeping what’s in the note. If the same memo changed on both sides since the last sync, you’ll be asked which version to keep. Off by default: unlike the rest of this plugin, this writes to your server.',
 
   // Auto sync settings
   AUTO_SYNC_STARTUP_NAME: 'Enable Auto Sync on Startup',
