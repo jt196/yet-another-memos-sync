@@ -63,8 +63,8 @@ export const enTranslations: Translations = {
   SKIP_IMAGES_DESC: 'Exclude image resources when syncing to avoid polluting your vault',
   SYNC_DAYS_LIMIT_NAME: 'Sync Days Limit',
   SYNC_DAYS_LIMIT_DESC: 'Only sync memos from the last N days (0 = no limit)',
-  PROFILE_BIDIRECTIONAL_SYNC_LABEL: 'Push checkbox changes back',
-  PROFILE_BIDIRECTIONAL_SYNC_DESC: 'When you check off an item in this daily note, push that change back to this Memos server. Off by default: unlike the rest of this plugin, this writes to your server.',
+  PROFILE_BIDIRECTIONAL_SYNC_LABEL: 'Push local changes back',
+  PROFILE_BIDIRECTIONAL_SYNC_DESC: 'When you edit a memo’s line in this daily note (text or checkbox), push that change back to this Memos server. If the same memo was also edited in Memos since the last sync, you’ll be asked which version to keep. Off by default: unlike the rest of this plugin, this writes to your server. Only single-line memos with no attachments can be pushed.',
 
   // Auto sync settings
   AUTO_SYNC_STARTUP_NAME: 'Enable Auto Sync on Startup',
@@ -93,6 +93,14 @@ export const enTranslations: Translations = {
   NETWORK_ERROR: 'Network error: Unable to connect to',
   FETCH_MEMOS_ERROR: 'Unable to fetch memos',
   UPDATE_MEMO_ERROR: 'Unable to update memo',
+
+  CONFLICT_MODAL_TITLE: 'Resolve sync conflicts',
+  CONFLICT_MODAL_DESC: 'These memos were edited both in this note and in Memos since the last sync. Choose which version to keep for each.',
+  CONFLICT_LOCAL_LABEL: 'In this note',
+  CONFLICT_REMOTE_LABEL: 'In Memos',
+  CONFLICT_KEEP_LOCAL: 'Keep this note’s version',
+  CONFLICT_KEEP_REMOTE: 'Keep Memos’ version',
+  SYNC_ALREADY_RUNNING: '⏳ A sync is already running',
   VIEW_ERROR_LOG: 'View sync error log',
   VIEW_ERROR_LOG_EMPTY: 'No errors logged yet.',
 

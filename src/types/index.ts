@@ -37,9 +37,11 @@ export interface MemosProfile {
   dailyMemoHeader: string;
   syncDaysLimit: number;
   enabled: boolean;
-  // Opt-in: push local checkbox toggles back to this Memos server. Off by
-  // default - unlike the rest of the plugin, this writes to the user's
-  // server rather than only reading from it.
+  // Opt-in: push local edits (text and checkbox state) back to this Memos
+  // server. Off by default - unlike the rest of the plugin, this writes to
+  // the user's server rather than only reading from it. A conflict (both
+  // sides edited since the last sync) pauses sync with an interactive
+  // pop-up rather than silently picking a side - see ConflictResolutionModal.
   enableBidirectionalSync: boolean;
 }
 
@@ -64,12 +66,13 @@ export interface MemosSettings {
 
   lastSyncDate: string;
 
-  // Bidirectional sync: the last checkbox state (checked/unchecked) we
-  // believe is in sync between the local note and the server, per profile
-  // and per memo (keyed by the memo's unix timestamp, matching the ^ref
-  // used in daily notes). Used to tell "user just checked this locally"
-  // apart from "this is just what we last pulled" - see checkboxPush.ts.
-  checkboxBaselines: Record<string, Record<string, boolean>>;
+  // Bidirectional sync: a content hash of the last state we believe is in
+  // sync between the local note and the server, per profile and per memo
+  // (keyed by the memo's unix timestamp, matching the ^ref used in daily
+  // notes). Used to tell "changed locally since last sync" apart from
+  // "this is just what we last pulled" - see contentPush.ts. Stores a hash,
+  // not the content itself, so this never becomes a second copy of your notes.
+  contentBaselines: Record<string, Record<string, string>>;
 }
 
 export interface ListMemosPage {

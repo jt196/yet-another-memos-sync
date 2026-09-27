@@ -12,6 +12,9 @@ interface LegacySettings {
 	syncDaysLimit?: unknown;
 	profiles?: unknown;
 	lastSyncDate?: unknown;
+	// Renamed to contentBaselines when checkbox-only push became full-content
+	// push (a boolean-per-memo baseline couldn't represent a text conflict).
+	checkboxBaselines?: unknown;
 }
 
 const DEFAULT_SETTINGS: MemosSettings = {
@@ -30,7 +33,7 @@ const DEFAULT_SETTINGS: MemosSettings = {
 	periodicSyncInterval: 0,
 
 	lastSyncDate: '',
-	checkboxBaselines: {},
+	contentBaselines: {},
 };
 
 function generateProfileId(): string {
@@ -96,8 +99,8 @@ function migrateSettings(raw: unknown): MemosSettings {
 		...profile,
 		enableBidirectionalSync: profile.enableBidirectionalSync === true,
 	}));
-	if (typeof merged.checkboxBaselines !== 'object' || merged.checkboxBaselines === null) {
-		merged.checkboxBaselines = {};
+	if (typeof merged.contentBaselines !== 'object' || merged.contentBaselines === null) {
+		merged.contentBaselines = {};
 	}
 
 	// Strip legacy top-level fields so they don't get re-saved.
@@ -108,6 +111,7 @@ function migrateSettings(raw: unknown): MemosSettings {
 	delete cleaned.dailyMemoHeader;
 	delete cleaned.syncDaysLimit;
 	delete cleaned.lastSyncByProfile;
+	delete cleaned.checkboxBaselines;
 
 	return merged;
 }
@@ -251,6 +255,7 @@ export default class YetAnotherMemosSyncPlugin extends Plugin implements SyncSta
 	settings: MemosSettings;
 	private dailyNoteManager: DailyNoteManager;
 	private periodicSyncIntervalId: number | null = null;
+	private syncInProgress = false;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -344,6 +349,16 @@ export default class YetAnotherMemosSyncPlugin extends Plugin implements SyncSta
 	}
 
 	private async runSync(mode: SyncMode): Promise<void> {
+		// A sync can now pause mid-run awaiting a conflict-resolution pop-up
+		// (see ConflictResolutionModal), so the ribbon/command/startup/periodic
+		// triggers could otherwise overlap and run concurrently against the
+		// same files. Guard against that rather than against just this one
+		// trigger path.
+		if (this.syncInProgress) {
+			new Notice(t.t('SYNC_ALREADY_RUNNING'));
+			return;
+		}
+		this.syncInProgress = true;
 		const force = mode === 'force';
 		try {
 			new Notice(force ? t.t('FORCE_SYNC_STARTING') : t.t('SYNC_STARTING'));
@@ -355,6 +370,8 @@ export default class YetAnotherMemosSyncPlugin extends Plugin implements SyncSta
 			console.error(`Sync (${mode}) failed:`, error);
 			void this.appendErrorLog(`\n[${new Date().toISOString()}] Sync mode=${mode}\n${message}\n${stack}`);
 			new Notice(`${force ? t.t('FORCE_SYNC_FAILED') : t.t('SYNC_FAILED')}: ${message}`, 10000);
+		} finally {
+			this.syncInProgress = false;
 		}
 	}
 

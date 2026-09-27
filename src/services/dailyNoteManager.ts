@@ -5,7 +5,10 @@ type MomentInstance = ReturnType<typeof moment>;
 import { MemosAPIClient } from '../api/memosClient';
 import { SimpleMemosPaginator } from '../api/memosPaginator';
 import { DailyNoteModifier, findHeaderSection, parseExistingMemoBlocks } from '../utils/dailyNoteModifier';
-import { planCheckboxPushes, executeCheckboxPushes } from '../utils/checkboxPush';
+import { planContentPushes, executeContentPushes, hashContent } from '../utils/contentPush';
+import { ReverseTransformOptions } from '../utils/memoReverseTransform';
+import { transformMemoToMarkdown } from '../utils/memoTransformer';
+import { ConflictResolutionModal, ConflictItem } from '../ui/conflictModal';
 import { headingTitle } from '../utils/markdownSections';
 import { t } from '../i18n/translationManager';
 import { APIClient, Memo, MemosProfile, MemosSettings } from '../types';
@@ -97,7 +100,12 @@ export class DailyNoteManager {
     let pushed = 0, pushFailed = 0;
     // Work off a copy so a mid-loop failure can't partially persist this
     // profile's baseline - saved once, after every day's push pass runs.
-    const baseline = { ...(this.settings.checkboxBaselines[profile.id] ?? {}) };
+    const baseline = { ...(this.settings.contentBaselines[profile.id] ?? {}) };
+    const reverseOpts: ReverseTransformOptions = {
+      useCalloutFormat: this.settings.useCalloutFormat,
+      useListCalloutFormat: this.settings.useListCalloutFormat,
+      skipImages: this.settings.skipImages,
+    };
 
     for (const [dateStr, memos] of Object.entries(dailyMemosByDay)) {
       try {
@@ -113,12 +121,11 @@ export class DailyNoteManager {
         }
 
         if (profile.enableBidirectionalSync) {
-          await this.pushCheckboxChanges(
-            client, dailyNote, dateStr, profile, rawMemosByDay[dateStr] ?? {}, baseline,
-          ).then(result => {
-            pushed += result.pushed;
-            pushFailed += result.failed;
-          });
+          const result = await this.pushContentChanges(
+            client, dailyNote, dateStr, profile, rawMemosByDay[dateStr] ?? {}, memos, baseline, reverseOpts,
+          );
+          pushed += result.pushed;
+          pushFailed += result.failed;
         }
 
         await this.app.vault.process(dailyNote, currentContent =>
@@ -130,45 +137,79 @@ export class DailyNoteManager {
     }
 
     if (profile.enableBidirectionalSync) {
-      this.settings.checkboxBaselines[profile.id] = baseline;
+      this.settings.contentBaselines[profile.id] = baseline;
       await this.state.saveSettings();
       if (pushFailed > 0) {
-        console.warn(`Checkbox push for "${profile.name}": ${pushed} pushed, ${pushFailed} failed - failures will retry next sync.`);
+        console.warn(`Content push for "${profile.name}": ${pushed} pushed, ${pushFailed} failed - failures will retry next sync.`);
       }
     }
   }
 
   /**
-   * Diff this day's local checkbox states against the freshly-fetched
-   * remote memos and push any local changes back to the server. Mutates
-   * `baseline` in place with the result. Must run before the pull/merge
-   * step below, against content as it stood before that merge, or a
-   * remote-side change and a local toggle in the same sync would look
-   * identical.
+   * Diff this day's local content against the freshly-fetched remote memos
+   * and push any local changes back to the server, prompting to resolve
+   * any genuine conflicts along the way. Mutates `baseline` and `memos` in
+   * place. Must run before the pull/merge step below, against content as
+   * it stood before that merge, or a remote-side change and a local edit
+   * in the same sync would look identical.
+   *
+   * `memos` (this day's fetched, markdown-transformed content, about to be
+   * merged into the note) is updated for anything pushed or resolved in
+   * favour of local, so that merge step doesn't turn around and overwrite
+   * the just-pushed line with the (now-stale) pre-push remote text.
    */
-  private async pushCheckboxChanges(
+  private async pushContentChanges(
     client: APIClient,
     dailyNote: TFile,
     dateStr: string,
     profile: MemosProfile,
     rawMemosForDay: Record<string, Memo>,
-    baseline: Record<string, boolean>,
+    memos: Record<string, string>,
+    baseline: Record<string, string>,
+    reverseOpts: ReverseTransformOptions,
   ): Promise<{ pushed: number; failed: number }> {
     const currentContent = await this.app.vault.read(dailyNote);
     const section = findHeaderSection(currentContent, profile.dailyMemoHeader);
     if (!section) return { pushed: 0, failed: 0 };
 
     const localBlocks = parseExistingMemoBlocks(section.localRecordContent);
-    const plan = planCheckboxPushes(localBlocks, rawMemosForDay, baseline);
-    const result = await executeCheckboxPushes(client, plan, baseline);
+    const plan = planContentPushes(localBlocks, rawMemosForDay, baseline, reverseOpts);
 
+    if (plan.conflicts.size > 0) {
+      const items: ConflictItem[] = [...plan.conflicts].map(([timestamp, c]) => ({
+        timestamp, localContent: c.localContent, remoteContent: c.remoteContent,
+      }));
+      const modal = new ConflictResolutionModal(this.app, profile.name, items);
+      const resolutions = await modal.openAndAwaitResolution();
+      for (const [timestamp, choice] of resolutions) {
+        const conflict = plan.conflicts.get(timestamp);
+        if (!conflict) continue;
+        if (choice === 'local') {
+          plan.toPush.set(timestamp, { memo: conflict.memo, newContent: conflict.localContent });
+        } else {
+          plan.baselineUpdates.set(timestamp, hashContent(conflict.remoteContent));
+        }
+      }
+    }
+
+    const result = await executeContentPushes(client, plan, baseline);
     // result.updatedBaseline is always a superset of the baseline passed in
-    // (executeCheckboxPushes only adds/overwrites entries, never removes),
+    // (executeContentPushes only adds/overwrites entries, never removes),
     // so this is safe to assign wholesale.
     Object.assign(baseline, result.updatedBaseline);
 
+    for (const [timestamp, { memo, newContent }] of plan.toPush) {
+      if (!(timestamp in result.updatedBaseline) || result.updatedBaseline[timestamp] !== hashContent(newContent)) {
+        continue; // this one failed to push - leave `memos` as the fetched remote text
+      }
+      memos[timestamp] = transformMemoToMarkdown(
+        { timestamp: Number(timestamp), content: newContent, resources: memo.resources },
+        reverseOpts.useCalloutFormat, reverseOpts.useListCalloutFormat, reverseOpts.skipImages,
+      ).content;
+    }
+
     if (result.failed > 0) {
-      console.warn(`${result.failed} checkbox push(es) failed for ${dateStr} ("${profile.name}") - will retry next sync.`);
+      console.warn(`${result.failed} content push(es) failed for ${dateStr} ("${profile.name}") - will retry next sync.`);
     }
     return { pushed: result.pushed, failed: result.failed };
   }

@@ -44,3 +44,22 @@ available in the app when your plugin is enabled.
   width: 100%;
   resize: vertical;
 }
+
+/* Conflict resolution modal */
+.yams-conflict-row {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background-color: var(--background-secondary);
+}
+
+.yams-conflict-side {
+  font-size: 0.9em;
+  word-break: break-word;
+  margin-bottom: 4px;
+}
+
+.yams-conflict-chosen {
+  border: 1px solid var(--interactive-accent);
+}
