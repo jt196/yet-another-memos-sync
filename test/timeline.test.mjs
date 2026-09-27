@@ -49,13 +49,13 @@ for (const incremental of [false, true]) {
     const local = '## Local\n\n- 🌆 17:10 Activity 〖⏳00:12:34〗\n  continuation  \n\n## Other\nUntouched\n';
     const original = '# Today\n\n## Memos [me]\n\n- old ^1\n\n' + local;
     const modifier = new DailyNoteModifier('## Memos [me]');
-    const result = modifier.modifyDailyNote(original, '2026-09-07', { 1: '- changed ^1', 2: '- new ^2' }, incremental);
+    const result = modifier.modifyDailyNote(original, '2026-09-07', { 1: '- changed ^1', 2: '- new ^2' });
     assert.ok(result.endsWith(local));
     assert.ok(result.startsWith('# Today\n\n## Memos [me]\n'));
     assert.equal((result.match(/## Local/g) || []).length, 1);
-    assert.equal(modifier.modifyDailyNote(result, '2026-09-07', { 1: '- changed ^1', 2: '- new ^2' }, incremental), undefined);
+    assert.equal(modifier.modifyDailyNote(result, '2026-09-07', { 1: '- changed ^1', 2: '- new ^2' }), undefined);
     const before = local + '\n## Memos [me]\n\n- old ^1\n';
-    assert.ok(modifier.modifyDailyNote(before, '2026-09-07', { 2: '- new ^2' }, incremental).startsWith(local));
+    assert.ok(modifier.modifyDailyNote(before, '2026-09-07', { 2: '- new ^2' }).startsWith(local));
   });
 }
 

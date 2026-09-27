@@ -6,6 +6,64 @@ import { mergeTodoStates, isSameExceptTodoStates } from './todoStateManager';
 
 import { headingTitle, markdownHeadings } from './markdownSections';
 
+export interface HeaderSection {
+  prefix: string;
+  suffix: string;
+  localRecordContent: string;
+}
+
+/**
+ * Locate the single heading matching `header` in `content` and split the
+ * file around the section it owns (from the heading to the next heading of
+ * the same or shallower level, or EOF). Returns undefined if the heading
+ * isn't found exactly once.
+ */
+export function findHeaderSection(content: string, header: string): HeaderSection | undefined {
+  const headings = markdownHeadings(content);
+  const level = header.trim().match(/^(#{1,6})\s/)?.[1].length ?? 1;
+  const matches = headings.filter(h => h.level === level && h.title === headingTitle(header));
+  if (matches.length !== 1) return undefined;
+
+  const section = matches[0];
+  const from = section.end;
+  const to = headings.find(h => h.start >= from)?.start ?? content.length;
+  return {
+    prefix: content.slice(0, from),
+    suffix: content.slice(to),
+    localRecordContent: content.slice(from, to).trim(),
+  };
+}
+
+/**
+ * Parse a header section's body into per-memo blocks keyed by the memo's
+ * `^timestamp` block ref. Each block is the full local line(s) for that
+ * memo (checkbox marker, text, any indented continuation lines).
+ */
+export function parseExistingMemoBlocks(localRecordContent: string): Map<string, string> {
+  const existingMemos = new Map<string, string>();
+  if (!localRecordContent) return existingMemos;
+
+  const memoRegex = /\^(\d+)/g;
+  let match;
+  while ((match = memoRegex.exec(localRecordContent)) !== null) {
+    const timestamp = match[1];
+    const memoStartIndex = localRecordContent.lastIndexOf('\n', match.index);
+    const memoEndIndex = localRecordContent.indexOf('\n- ', match.index);
+    const fullMemoEndIndex = localRecordContent.indexOf('\n\n', match.index);
+
+    let memoEnd = memoEndIndex !== -1 ? memoEndIndex : fullMemoEndIndex;
+    if (memoEnd === -1) memoEnd = localRecordContent.length;
+
+    const memoStart = memoStartIndex !== -1 ? memoStartIndex + 1 : 0;
+    const memoContent = localRecordContent.slice(memoStart, memoEnd).trim();
+
+    if (memoContent) {
+      existingMemos.set(timestamp, memoContent);
+    }
+  }
+  return existingMemos;
+}
+
 export class DailyNoteModifier {
   private dailyMemosHeader: string;
 
@@ -16,17 +74,36 @@ export class DailyNoteModifier {
   /**
    * Modify daily note content with fetched memos
    * Uses smart incremental update strategy to minimize file changes
+   *
+   * @param trustRemoteTimestamps  Memo timestamps (as string keys, matching
+   *   `fetchedRecordList`) for which remote should simply overwrite local
+   *   outright, checkbox included, instead of the default of always
+   *   re-imposing whatever checkbox state the local note currently shows
+   *   (matched by text - the only thing stopping a stale pull from
+   *   reverting a check you'd just made, when nothing else is watching for
+   *   local edits).
+   *
+   *   Bidirectional sync (contentPush.ts) passes exactly the timestamps it
+   *   was able to reason about this sync - it already protected any
+   *   genuine local edit among them earlier in the same sync (and mutated
+   *   the fetched content to match before this ever runs), so for those,
+   *   any remaining difference here is a legitimate remote-side change
+   *   that should win. Deliberately per-timestamp, not per-profile:
+   *   contentPush only ever handles single-line, attachment-free memos
+   *   (see memoReverseTransform.ts) - anything outside that still needs
+   *   the default text-preservation behaviour, or a checkbox on e.g. a
+   *   multi-line memo would lose the only protection it has, with nothing
+   *   to replace it (contentPush can't push it back either).
    */
   modifyDailyNote(
     originFileContent: string,
     today: string,
     fetchedRecordList: Record<string, string>,
+    trustRemoteTimestamps: ReadonlySet<string> = new Set(),
   ): string | undefined {
     const header = this.dailyMemosHeader;
-    const headings = markdownHeadings(originFileContent);
-    const level = header.trim().match(/^(#{1,6})\s/)?.[1].length ?? 1;
-    const matches = headings.filter(h => h.level === level && h.title === headingTitle(header));
-    if (matches.length !== 1) {
+    const section = findHeaderSection(originFileContent, header);
+    if (!section) {
       // Every existing daily note in the sync window is checked now (so full-day
       // deletions can be detected - see DailyNoteManager.processMemos), including
       // ones that never had this header, e.g. notes predating the plugin's setup.
@@ -37,36 +114,8 @@ export class DailyNoteModifier {
       }
       return;
     }
-    const section = matches[0];
-    const from = section.end;
-    const to = headings.find(h => h.start >= from)?.start ?? originFileContent.length;
-    const localRecordContent = originFileContent.slice(from, to).trim();
-    const prefix = originFileContent.slice(0, from);
-    const suffix = originFileContent.slice(to);
-
-    // Parse existing memos in the file
-    const existingMemos = new Map<string, string>();
-    if (localRecordContent) {
-      const memoRegex = /\^(\d+)/g;
-      let match;
-      while ((match = memoRegex.exec(localRecordContent)) !== null) {
-        const timestamp = match[1];
-        // Find the full memo content for this timestamp
-        const memoStartIndex = localRecordContent.lastIndexOf('\n', match.index);
-        const memoEndIndex = localRecordContent.indexOf('\n- ', match.index);
-        const fullMemoEndIndex = localRecordContent.indexOf('\n\n', match.index);
-
-        let memoEnd = memoEndIndex !== -1 ? memoEndIndex : fullMemoEndIndex;
-        if (memoEnd === -1) memoEnd = localRecordContent.length;
-
-        const memoStart = memoStartIndex !== -1 ? memoStartIndex + 1 : 0;
-        const memoContent = localRecordContent.slice(memoStart, memoEnd).trim();
-
-        if (memoContent) {
-          existingMemos.set(timestamp, memoContent);
-        }
-      }
-    }
+    const { prefix, suffix, localRecordContent } = section;
+    const existingMemos = parseExistingMemoBlocks(localRecordContent);
 
     // Determine what needs to be updated
     const updates = new Map<string, string>();
@@ -79,18 +128,22 @@ export class DailyNoteModifier {
       if (existingContent !== undefined) {
         const remoteContent = content;
 
+        const trustRemote = trustRemoteTimestamps.has(timestamp);
+
         // Check if contents are the same except for todo states
         if (isSameExceptTodoStates(existingContent, remoteContent)) {
-          // Merge todo states: preserve local completion status
-          const mergedContent = mergeTodoStates(existingContent, remoteContent);
+          const mergedContent = trustRemote
+            ? remoteContent
+            : mergeTodoStates(existingContent, remoteContent);
           if (mergedContent !== existingContent) {
             updates.set(timestamp, mergedContent);
           }
           // If merged content is same as existing, no update needed
         } else if (existingContent !== remoteContent) {
           // Content has changed beyond just todo states
-          // Still merge todo states but update the content
-          const mergedContent = mergeTodoStates(existingContent, remoteContent);
+          const mergedContent = trustRemote
+            ? remoteContent
+            : mergeTodoStates(existingContent, remoteContent);
           updates.set(timestamp, mergedContent);
         }
         // If contents are exactly the same, no update needed

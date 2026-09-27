@@ -12,6 +12,9 @@ interface LegacySettings {
 	syncDaysLimit?: unknown;
 	profiles?: unknown;
 	lastSyncDate?: unknown;
+	// Renamed to contentBaselines when checkbox-only push became full-content
+	// push (a boolean-per-memo baseline couldn't represent a text conflict).
+	checkboxBaselines?: unknown;
 }
 
 const DEFAULT_SETTINGS: MemosSettings = {
@@ -30,6 +33,7 @@ const DEFAULT_SETTINGS: MemosSettings = {
 	periodicSyncInterval: 0,
 
 	lastSyncDate: '',
+	contentBaselines: {},
 };
 
 function generateProfileId(): string {
@@ -45,6 +49,7 @@ function defaultProfile(): MemosProfile {
 		dailyMemoHeader: '## 📓 Memos',
 		syncDaysLimit: 30,
 		enabled: true,
+		enableBidirectionalSync: false,
 	};
 }
 
@@ -75,6 +80,7 @@ function migrateSettings(raw: unknown): MemosSettings {
 				dailyMemoHeader: legacyHeader,
 				syncDaysLimit: legacyDays,
 				enabled: !!(legacyApiUrl && legacyApiToken),
+				enableBidirectionalSync: false,
 			}];
 		} else {
 			merged.profiles = [];
@@ -87,6 +93,16 @@ function migrateSettings(raw: unknown): MemosSettings {
 
 	if (typeof merged.timelineHeader !== 'string') merged.timelineHeader = '';
 
+	// Backfill fields added after a profile/settings blob may have already
+	// been saved, so older data always reads as the documented off-by-default.
+	merged.profiles = merged.profiles.map(profile => ({
+		...profile,
+		enableBidirectionalSync: profile.enableBidirectionalSync === true,
+	}));
+	if (typeof merged.contentBaselines !== 'object' || merged.contentBaselines === null) {
+		merged.contentBaselines = {};
+	}
+
 	// Strip legacy top-level fields so they don't get re-saved.
 	const cleaned = merged as MemosSettings & LegacySettings & { lastSyncByProfile?: unknown };
 	delete cleaned.apiUrl;
@@ -95,6 +111,7 @@ function migrateSettings(raw: unknown): MemosSettings {
 	delete cleaned.dailyMemoHeader;
 	delete cleaned.syncDaysLimit;
 	delete cleaned.lastSyncByProfile;
+	delete cleaned.checkboxBaselines;
 
 	return merged;
 }
@@ -203,6 +220,13 @@ class ProfileEditModal extends Modal {
 				.setValue(String(this.draft.syncDaysLimit))
 				.onChange(value => { this.draft.syncDaysLimit = Number(value) || 0; }));
 
+		new Setting(contentEl)
+			.setName(t.t('PROFILE_BIDIRECTIONAL_SYNC_LABEL'))
+			.setDesc(t.t('PROFILE_BIDIRECTIONAL_SYNC_DESC'))
+			.addToggle(toggle => toggle
+				.setValue(this.draft.enableBidirectionalSync)
+				.onChange(value => { this.draft.enableBidirectionalSync = value; }));
+
 		const buttons = contentEl.createDiv({ cls: 'modal-button-container' });
 		new ButtonComponent(buttons)
 			.setButtonText(t.t('CONFIRM_CANCEL'))
@@ -231,6 +255,7 @@ export default class YetAnotherMemosSyncPlugin extends Plugin implements SyncSta
 	settings: MemosSettings;
 	private dailyNoteManager: DailyNoteManager;
 	private periodicSyncIntervalId: number | null = null;
+	private syncInProgress = false;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -324,6 +349,16 @@ export default class YetAnotherMemosSyncPlugin extends Plugin implements SyncSta
 	}
 
 	private async runSync(mode: SyncMode): Promise<void> {
+		// A sync can now pause mid-run awaiting a conflict-resolution pop-up
+		// (see ConflictResolutionModal), so the ribbon/command/startup/periodic
+		// triggers could otherwise overlap and run concurrently against the
+		// same files. Guard against that rather than against just this one
+		// trigger path.
+		if (this.syncInProgress) {
+			new Notice(t.t('SYNC_ALREADY_RUNNING'));
+			return;
+		}
+		this.syncInProgress = true;
 		const force = mode === 'force';
 		try {
 			new Notice(force ? t.t('FORCE_SYNC_STARTING') : t.t('SYNC_STARTING'));
@@ -335,6 +370,8 @@ export default class YetAnotherMemosSyncPlugin extends Plugin implements SyncSta
 			console.error(`Sync (${mode}) failed:`, error);
 			void this.appendErrorLog(`\n[${new Date().toISOString()}] Sync mode=${mode}\n${message}\n${stack}`);
 			new Notice(`${force ? t.t('FORCE_SYNC_FAILED') : t.t('SYNC_FAILED')}: ${message}`, 10000);
+		} finally {
+			this.syncInProgress = false;
 		}
 	}
 

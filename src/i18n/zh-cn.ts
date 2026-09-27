@@ -63,6 +63,8 @@ export const zhCnTranslations: Translations = {
   SKIP_IMAGES_DESC: '同步时不包含图片资源，避免图片污染 Obsidian 库',
   SYNC_DAYS_LIMIT_NAME: '同步天数限制',
   SYNC_DAYS_LIMIT_DESC: '只同步最近 N 天内的备忘录（0 = 无限制）',
+  PROFILE_BIDIRECTIONAL_SYNC_LABEL: '双向同步',
+  PROFILE_BIDIRECTIONAL_SYNC_DESC: '对于单行、无附件的备忘录：将本地编辑（文字或勾选状态）回写到此 Memos 服务器，并在拉取时让服务器端的真实更改覆盖本地内容，而不是始终保留笔记中的版本。如果该备忘录自上次同步后在双方都被修改，系统会询问你要保留哪个版本。默认关闭：与本插件其他功能不同，此功能会写入你的服务器。',
 
   // Auto sync settings
   AUTO_SYNC_STARTUP_NAME: '启动时自动同步',
@@ -90,6 +92,15 @@ export const zhCnTranslations: Translations = {
   // Error messages
   NETWORK_ERROR: '网络错误: 无法连接到',
   FETCH_MEMOS_ERROR: '无法获取备忘录',
+  UPDATE_MEMO_ERROR: '无法更新备忘录',
+
+  CONFLICT_MODAL_TITLE: '解决同步冲突',
+  CONFLICT_MODAL_DESC: '这些备忘录自上次同步后在此笔记和 Memos 中都被修改过。请为每一项选择要保留的版本。',
+  CONFLICT_LOCAL_LABEL: '此笔记中的版本',
+  CONFLICT_REMOTE_LABEL: 'Memos 中的版本',
+  CONFLICT_KEEP_LOCAL: '保留此笔记的版本',
+  CONFLICT_KEEP_REMOTE: '保留 Memos 的版本',
+  SYNC_ALREADY_RUNNING: '⏳ 已有同步在进行中',
   VIEW_ERROR_LOG: '查看同步错误日志',
   VIEW_ERROR_LOG_EMPTY: '暂无错误日志。',
 

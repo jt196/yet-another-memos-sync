@@ -65,6 +65,8 @@ export interface Translations {
   SKIP_IMAGES_DESC: string;
   SYNC_DAYS_LIMIT_NAME: string;
   SYNC_DAYS_LIMIT_DESC: string;
+  PROFILE_BIDIRECTIONAL_SYNC_LABEL: string;
+  PROFILE_BIDIRECTIONAL_SYNC_DESC: string;
 
   // 自动同步设置
   AUTO_SYNC_STARTUP_NAME: string;
@@ -92,6 +94,16 @@ export interface Translations {
   // 错误消息
   NETWORK_ERROR: string;
   FETCH_MEMOS_ERROR: string;
+  UPDATE_MEMO_ERROR: string;
+
+  // Conflict resolution
+  CONFLICT_MODAL_TITLE: string;
+  CONFLICT_MODAL_DESC: string;
+  CONFLICT_LOCAL_LABEL: string;
+  CONFLICT_REMOTE_LABEL: string;
+  CONFLICT_KEEP_LOCAL: string;
+  CONFLICT_KEEP_REMOTE: string;
+  SYNC_ALREADY_RUNNING: string;
   VIEW_ERROR_LOG: string;
   VIEW_ERROR_LOG_EMPTY: string;
 

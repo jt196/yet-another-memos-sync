@@ -4,13 +4,18 @@ import { getDailyNote, createDailyNote, getAllDailyNotes, getDateFromFile } from
 type MomentInstance = ReturnType<typeof moment>;
 import { MemosAPIClient } from '../api/memosClient';
 import { SimpleMemosPaginator } from '../api/memosPaginator';
-import { DailyNoteModifier } from '../utils/dailyNoteModifier';
+import { DailyNoteModifier, findHeaderSection, parseExistingMemoBlocks } from '../utils/dailyNoteModifier';
+import { planContentPushes, executeContentPushes, hashContent } from '../utils/contentPush';
+import { ReverseTransformOptions } from '../utils/memoReverseTransform';
+import { transformMemoToMarkdown } from '../utils/memoTransformer';
+import { ConflictResolutionModal, ConflictItem } from '../ui/conflictModal';
 import { headingTitle } from '../utils/markdownSections';
 import { t } from '../i18n/translationManager';
-import { MemosProfile, MemosSettings } from '../types';
+import { APIClient, Memo, MemosProfile, MemosSettings } from '../types';
 
 export interface SyncStateStore {
   markSyncedToday(): Promise<void>;
+  saveSettings(): Promise<void>;
 }
 
 export type SyncMode = 'smart' | 'incremental' | 'force';
@@ -65,15 +70,16 @@ export class DailyNoteManager {
       effectiveSyncDaysLimit,
     );
 
-    await this.processMemos(paginator, profile);
+    await this.processMemos(paginator, profile, client);
   }
 
   private async processMemos(
     paginator: SimpleMemosPaginator,
     profile: MemosProfile,
+    client: APIClient,
   ): Promise<void> {
     const modifier = new DailyNoteModifier(profile.dailyMemoHeader);
-    const { dailyMemosByDay, cutoffTimestamp } = await paginator.collect();
+    const { dailyMemosByDay, rawMemosByDay, cutoffTimestamp } = await paginator.collect();
 
     // A day whose memos were all deleted remotely never appears in
     // dailyMemosByDay (there's nothing fetched for it), so without this it
@@ -91,6 +97,16 @@ export class DailyNoteManager {
       }
     }
 
+    let pushed = 0, pushFailed = 0;
+    // Work off a copy so a mid-loop failure can't partially persist this
+    // profile's baseline - saved once, after every day's push pass runs.
+    const baseline = { ...(this.settings.contentBaselines[profile.id] ?? {}) };
+    const reverseOpts: ReverseTransformOptions = {
+      useCalloutFormat: this.settings.useCalloutFormat,
+      useListCalloutFormat: this.settings.useListCalloutFormat,
+      skipImages: this.settings.skipImages,
+    };
+
     for (const [dateStr, memos] of Object.entries(dailyMemosByDay)) {
       try {
         const momentDay = moment(dateStr);
@@ -104,13 +120,110 @@ export class DailyNoteManager {
           continue;
         }
 
+        let trustRemoteTimestamps = new Set<string>();
+        if (profile.enableBidirectionalSync) {
+          const result = await this.pushContentChanges(
+            client, dailyNote, dateStr, profile, rawMemosByDay[dateStr] ?? {}, memos, baseline, reverseOpts,
+          );
+          pushed += result.pushed;
+          pushFailed += result.failed;
+          trustRemoteTimestamps = result.trustRemoteTimestamps;
+        }
+
         await this.app.vault.process(dailyNote, currentContent =>
-          modifier.modifyDailyNote(currentContent, dateStr, memos) ?? currentContent
+          modifier.modifyDailyNote(currentContent, dateStr, memos, trustRemoteTimestamps) ?? currentContent
         );
       } catch (error) {
         console.error(`Failed to process memos for ${dateStr}:`, error);
       }
     }
+
+    if (profile.enableBidirectionalSync) {
+      this.settings.contentBaselines[profile.id] = baseline;
+      await this.state.saveSettings();
+      if (pushFailed > 0) {
+        console.warn(`Content push for "${profile.name}": ${pushed} pushed, ${pushFailed} failed - failures will retry next sync.`);
+      }
+    }
+  }
+
+  /**
+   * Diff this day's local content against the freshly-fetched remote memos
+   * and push any local changes back to the server, prompting to resolve
+   * any genuine conflicts along the way. Mutates `baseline` and `memos` in
+   * place. Must run before the pull/merge step below, against content as
+   * it stood before that merge, or a remote-side change and a local edit
+   * in the same sync would look identical.
+   *
+   * `memos` (this day's fetched, markdown-transformed content, about to be
+   * merged into the note) is updated for anything pushed or resolved in
+   * favour of local, so that merge step doesn't turn around and overwrite
+   * the just-pushed line with the (now-stale) pre-push remote text.
+   */
+  private async pushContentChanges(
+    client: APIClient,
+    dailyNote: TFile,
+    dateStr: string,
+    profile: MemosProfile,
+    rawMemosForDay: Record<string, Memo>,
+    memos: Record<string, string>,
+    baseline: Record<string, string>,
+    reverseOpts: ReverseTransformOptions,
+  ): Promise<{ pushed: number; failed: number; trustRemoteTimestamps: Set<string> }> {
+    const currentContent = await this.app.vault.read(dailyNote);
+    const section = findHeaderSection(currentContent, profile.dailyMemoHeader);
+    if (!section) return { pushed: 0, failed: 0, trustRemoteTimestamps: new Set() };
+
+    const localBlocks = parseExistingMemoBlocks(section.localRecordContent);
+    const plan = planContentPushes(localBlocks, rawMemosForDay, baseline, reverseOpts);
+
+    if (plan.conflicts.size > 0) {
+      const items: ConflictItem[] = [...plan.conflicts].map(([timestamp, c]) => ({
+        timestamp, localContent: c.localContent, remoteContent: c.remoteContent,
+      }));
+      const modal = new ConflictResolutionModal(this.app, profile.name, items);
+      const resolutions = await modal.openAndAwaitResolution();
+      for (const [timestamp, choice] of resolutions) {
+        const conflict = plan.conflicts.get(timestamp);
+        if (!conflict) continue;
+        if (choice === 'local') {
+          plan.toPush.set(timestamp, { memo: conflict.memo, newContent: conflict.localContent });
+        } else {
+          plan.baselineUpdates.set(timestamp, hashContent(conflict.remoteContent));
+        }
+      }
+    }
+
+    const result = await executeContentPushes(client, plan, baseline);
+    // result.updatedBaseline is always a superset of the baseline passed in
+    // (executeContentPushes only adds/overwrites entries, never removes),
+    // so this is safe to assign wholesale.
+    Object.assign(baseline, result.updatedBaseline);
+
+    for (const [timestamp, { memo, newContent }] of plan.toPush) {
+      if (!(timestamp in result.updatedBaseline) || result.updatedBaseline[timestamp] !== hashContent(newContent)) {
+        continue; // this one failed to push - leave `memos` as the fetched remote text
+      }
+      memos[timestamp] = transformMemoToMarkdown(
+        { timestamp: Number(timestamp), content: newContent, resources: memo.resources },
+        reverseOpts.useCalloutFormat, reverseOpts.useListCalloutFormat, reverseOpts.skipImages,
+      ).content;
+    }
+
+    if (result.failed > 0) {
+      console.warn(`${result.failed} content push(es) failed for ${dateStr} ("${profile.name}") - will retry next sync.`);
+    }
+
+    // Every timestamp planContentPushes could actually reason about (it
+    // skips anything reverseTransformBlock can't handle - multi-line,
+    // attachments, tampered blocks). For exactly these, the merge step
+    // below should trust remote outright rather than fall back to its
+    // default text-preservation behaviour - see DailyNoteModifier.
+    const trustRemoteTimestamps = new Set([
+      ...plan.baselineUpdates.keys(), ...plan.toPush.keys(), ...plan.conflicts.keys(),
+    ]);
+
+    return { pushed: result.pushed, failed: result.failed, trustRemoteTimestamps };
   }
 
   private async getOrCreateDailyNote(momentDay: MomentInstance): Promise<TFile | null> {
