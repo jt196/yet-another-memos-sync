@@ -63,6 +63,8 @@ export const zhCnTranslations: Translations = {
   SKIP_IMAGES_DESC: '同步时不包含图片资源，避免图片污染 Obsidian 库',
   SYNC_DAYS_LIMIT_NAME: '同步天数限制',
   SYNC_DAYS_LIMIT_DESC: '只同步最近 N 天内的备忘录（0 = 无限制）',
+  PROFILE_BIDIRECTIONAL_SYNC_LABEL: '将勾选状态回写',
+  PROFILE_BIDIRECTIONAL_SYNC_DESC: '在此日记中勾选待办事项时，将该更改回写到此 Memos 服务器。默认关闭：与本插件其他功能不同，此功能会写入你的服务器。',
 
   // Auto sync settings
   AUTO_SYNC_STARTUP_NAME: '启动时自动同步',
@@ -90,6 +92,7 @@ export const zhCnTranslations: Translations = {
   // Error messages
   NETWORK_ERROR: '网络错误: 无法连接到',
   FETCH_MEMOS_ERROR: '无法获取备忘录',
+  UPDATE_MEMO_ERROR: '无法更新备忘录',
   VIEW_ERROR_LOG: '查看同步错误日志',
   VIEW_ERROR_LOG_EMPTY: '暂无错误日志。',
 

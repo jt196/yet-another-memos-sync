@@ -42,6 +42,11 @@ function extractTimestamp(memo: Memo): number | null {
 
 export interface MemosWindow {
   dailyMemosByDay: Record<string, Record<string, string>>;
+  // Raw fetched memos (pre-markdown-transform), bucketed the same way as
+  // dailyMemosByDay. Needed to push checkbox changes back to the server -
+  // the transform in transformMemoToMarkdown discards the memo's
+  // name/uid, which updateMemoContent requires. See checkboxPush.ts.
+  rawMemosByDay: Record<string, Record<string, Memo>>;
   latestTimestamp: string;
   cutoffTimestamp: number;
 }
@@ -72,6 +77,7 @@ export class SimpleMemosPaginator {
 
   async collect(): Promise<MemosWindow> {
     const dailyMemosByDay: Record<string, Record<string, string>> = {};
+    const rawMemosByDay: Record<string, Record<string, Memo>> = {};
     let latestTimestamp = '';
 
     const cutoffTimestamp = this.syncDaysLimit > 0
@@ -128,6 +134,9 @@ export class SimpleMemosPaginator {
           if (!dailyMemosByDay[dailyMemo.date]) dailyMemosByDay[dailyMemo.date] = {};
           dailyMemosByDay[dailyMemo.date][dailyMemo.timestamp] = dailyMemo.content;
 
+          if (!rawMemosByDay[dailyMemo.date]) rawMemosByDay[dailyMemo.date] = {};
+          rawMemosByDay[dailyMemo.date][dailyMemo.timestamp] = memo;
+
           if (!latestTimestamp || timestamp > parseInt(latestTimestamp)) {
             latestTimestamp = String(timestamp);
           }
@@ -146,6 +155,6 @@ export class SimpleMemosPaginator {
       }
     }
 
-    return { dailyMemosByDay, latestTimestamp, cutoffTimestamp };
+    return { dailyMemosByDay, rawMemosByDay, latestTimestamp, cutoffTimestamp };
   }
 }

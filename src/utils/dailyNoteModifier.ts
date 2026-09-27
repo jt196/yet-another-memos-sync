@@ -6,6 +6,64 @@ import { mergeTodoStates, isSameExceptTodoStates } from './todoStateManager';
 
 import { headingTitle, markdownHeadings } from './markdownSections';
 
+export interface HeaderSection {
+  prefix: string;
+  suffix: string;
+  localRecordContent: string;
+}
+
+/**
+ * Locate the single heading matching `header` in `content` and split the
+ * file around the section it owns (from the heading to the next heading of
+ * the same or shallower level, or EOF). Returns undefined if the heading
+ * isn't found exactly once.
+ */
+export function findHeaderSection(content: string, header: string): HeaderSection | undefined {
+  const headings = markdownHeadings(content);
+  const level = header.trim().match(/^(#{1,6})\s/)?.[1].length ?? 1;
+  const matches = headings.filter(h => h.level === level && h.title === headingTitle(header));
+  if (matches.length !== 1) return undefined;
+
+  const section = matches[0];
+  const from = section.end;
+  const to = headings.find(h => h.start >= from)?.start ?? content.length;
+  return {
+    prefix: content.slice(0, from),
+    suffix: content.slice(to),
+    localRecordContent: content.slice(from, to).trim(),
+  };
+}
+
+/**
+ * Parse a header section's body into per-memo blocks keyed by the memo's
+ * `^timestamp` block ref. Each block is the full local line(s) for that
+ * memo (checkbox marker, text, any indented continuation lines).
+ */
+export function parseExistingMemoBlocks(localRecordContent: string): Map<string, string> {
+  const existingMemos = new Map<string, string>();
+  if (!localRecordContent) return existingMemos;
+
+  const memoRegex = /\^(\d+)/g;
+  let match;
+  while ((match = memoRegex.exec(localRecordContent)) !== null) {
+    const timestamp = match[1];
+    const memoStartIndex = localRecordContent.lastIndexOf('\n', match.index);
+    const memoEndIndex = localRecordContent.indexOf('\n- ', match.index);
+    const fullMemoEndIndex = localRecordContent.indexOf('\n\n', match.index);
+
+    let memoEnd = memoEndIndex !== -1 ? memoEndIndex : fullMemoEndIndex;
+    if (memoEnd === -1) memoEnd = localRecordContent.length;
+
+    const memoStart = memoStartIndex !== -1 ? memoStartIndex + 1 : 0;
+    const memoContent = localRecordContent.slice(memoStart, memoEnd).trim();
+
+    if (memoContent) {
+      existingMemos.set(timestamp, memoContent);
+    }
+  }
+  return existingMemos;
+}
+
 export class DailyNoteModifier {
   private dailyMemosHeader: string;
 
@@ -23,10 +81,8 @@ export class DailyNoteModifier {
     fetchedRecordList: Record<string, string>,
   ): string | undefined {
     const header = this.dailyMemosHeader;
-    const headings = markdownHeadings(originFileContent);
-    const level = header.trim().match(/^(#{1,6})\s/)?.[1].length ?? 1;
-    const matches = headings.filter(h => h.level === level && h.title === headingTitle(header));
-    if (matches.length !== 1) {
+    const section = findHeaderSection(originFileContent, header);
+    if (!section) {
       // Every existing daily note in the sync window is checked now (so full-day
       // deletions can be detected - see DailyNoteManager.processMemos), including
       // ones that never had this header, e.g. notes predating the plugin's setup.
@@ -37,36 +93,8 @@ export class DailyNoteModifier {
       }
       return;
     }
-    const section = matches[0];
-    const from = section.end;
-    const to = headings.find(h => h.start >= from)?.start ?? originFileContent.length;
-    const localRecordContent = originFileContent.slice(from, to).trim();
-    const prefix = originFileContent.slice(0, from);
-    const suffix = originFileContent.slice(to);
-
-    // Parse existing memos in the file
-    const existingMemos = new Map<string, string>();
-    if (localRecordContent) {
-      const memoRegex = /\^(\d+)/g;
-      let match;
-      while ((match = memoRegex.exec(localRecordContent)) !== null) {
-        const timestamp = match[1];
-        // Find the full memo content for this timestamp
-        const memoStartIndex = localRecordContent.lastIndexOf('\n', match.index);
-        const memoEndIndex = localRecordContent.indexOf('\n- ', match.index);
-        const fullMemoEndIndex = localRecordContent.indexOf('\n\n', match.index);
-
-        let memoEnd = memoEndIndex !== -1 ? memoEndIndex : fullMemoEndIndex;
-        if (memoEnd === -1) memoEnd = localRecordContent.length;
-
-        const memoStart = memoStartIndex !== -1 ? memoStartIndex + 1 : 0;
-        const memoContent = localRecordContent.slice(memoStart, memoEnd).trim();
-
-        if (memoContent) {
-          existingMemos.set(timestamp, memoContent);
-        }
-      }
-    }
+    const { prefix, suffix, localRecordContent } = section;
+    const existingMemos = parseExistingMemoBlocks(localRecordContent);
 
     // Determine what needs to be updated
     const updates = new Map<string, string>();

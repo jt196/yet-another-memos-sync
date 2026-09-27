@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS: MemosSettings = {
 	periodicSyncInterval: 0,
 
 	lastSyncDate: '',
+	checkboxBaselines: {},
 };
 
 function generateProfileId(): string {
@@ -45,6 +46,7 @@ function defaultProfile(): MemosProfile {
 		dailyMemoHeader: '## 📓 Memos',
 		syncDaysLimit: 30,
 		enabled: true,
+		enableBidirectionalSync: false,
 	};
 }
 
@@ -75,6 +77,7 @@ function migrateSettings(raw: unknown): MemosSettings {
 				dailyMemoHeader: legacyHeader,
 				syncDaysLimit: legacyDays,
 				enabled: !!(legacyApiUrl && legacyApiToken),
+				enableBidirectionalSync: false,
 			}];
 		} else {
 			merged.profiles = [];
@@ -86,6 +89,16 @@ function migrateSettings(raw: unknown): MemosSettings {
 	}
 
 	if (typeof merged.timelineHeader !== 'string') merged.timelineHeader = '';
+
+	// Backfill fields added after a profile/settings blob may have already
+	// been saved, so older data always reads as the documented off-by-default.
+	merged.profiles = merged.profiles.map(profile => ({
+		...profile,
+		enableBidirectionalSync: profile.enableBidirectionalSync === true,
+	}));
+	if (typeof merged.checkboxBaselines !== 'object' || merged.checkboxBaselines === null) {
+		merged.checkboxBaselines = {};
+	}
 
 	// Strip legacy top-level fields so they don't get re-saved.
 	const cleaned = merged as MemosSettings & LegacySettings & { lastSyncByProfile?: unknown };
@@ -202,6 +215,13 @@ class ProfileEditModal extends Modal {
 				.setPlaceholder('30')
 				.setValue(String(this.draft.syncDaysLimit))
 				.onChange(value => { this.draft.syncDaysLimit = Number(value) || 0; }));
+
+		new Setting(contentEl)
+			.setName(t.t('PROFILE_BIDIRECTIONAL_SYNC_LABEL'))
+			.setDesc(t.t('PROFILE_BIDIRECTIONAL_SYNC_DESC'))
+			.addToggle(toggle => toggle
+				.setValue(this.draft.enableBidirectionalSync)
+				.onChange(value => { this.draft.enableBidirectionalSync = value; }));
 
 		const buttons = contentEl.createDiv({ cls: 'modal-button-container' });
 		new ButtonComponent(buttons)

@@ -37,6 +37,10 @@ export interface MemosProfile {
   dailyMemoHeader: string;
   syncDaysLimit: number;
   enabled: boolean;
+  // Opt-in: push local checkbox toggles back to this Memos server. Off by
+  // default - unlike the rest of the plugin, this writes to the user's
+  // server rather than only reading from it.
+  enableBidirectionalSync: boolean;
 }
 
 export interface MemosSettings {
@@ -59,6 +63,13 @@ export interface MemosSettings {
   periodicSyncInterval: number;
 
   lastSyncDate: string;
+
+  // Bidirectional sync: the last checkbox state (checked/unchecked) we
+  // believe is in sync between the local note and the server, per profile
+  // and per memo (keyed by the memo's unix timestamp, matching the ^ref
+  // used in daily notes). Used to tell "user just checked this locally"
+  // apart from "this is just what we last pulled" - see checkboxPush.ts.
+  checkboxBaselines: Record<string, Record<string, boolean>>;
 }
 
 export interface ListMemosPage {
@@ -74,4 +85,9 @@ export interface ListMemosOptions {
 
 export interface APIClient {
   listMemos(opts?: ListMemosOptions): Promise<ListMemosPage>;
+  // Replaces a memo's content wholesale (partial update, `content` field
+  // only). Used to push a local checkbox toggle back to the server - see
+  // checkboxPush.ts. Callers must send the full current content with just
+  // the checkbox character changed, not a diff.
+  updateMemoContent(name: string, content: string): Promise<Memo>;
 }

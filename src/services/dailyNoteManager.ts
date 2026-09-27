@@ -4,13 +4,15 @@ import { getDailyNote, createDailyNote, getAllDailyNotes, getDateFromFile } from
 type MomentInstance = ReturnType<typeof moment>;
 import { MemosAPIClient } from '../api/memosClient';
 import { SimpleMemosPaginator } from '../api/memosPaginator';
-import { DailyNoteModifier } from '../utils/dailyNoteModifier';
+import { DailyNoteModifier, findHeaderSection, parseExistingMemoBlocks } from '../utils/dailyNoteModifier';
+import { planCheckboxPushes, executeCheckboxPushes } from '../utils/checkboxPush';
 import { headingTitle } from '../utils/markdownSections';
 import { t } from '../i18n/translationManager';
-import { MemosProfile, MemosSettings } from '../types';
+import { APIClient, Memo, MemosProfile, MemosSettings } from '../types';
 
 export interface SyncStateStore {
   markSyncedToday(): Promise<void>;
+  saveSettings(): Promise<void>;
 }
 
 export type SyncMode = 'smart' | 'incremental' | 'force';
@@ -65,15 +67,16 @@ export class DailyNoteManager {
       effectiveSyncDaysLimit,
     );
 
-    await this.processMemos(paginator, profile);
+    await this.processMemos(paginator, profile, client);
   }
 
   private async processMemos(
     paginator: SimpleMemosPaginator,
     profile: MemosProfile,
+    client: APIClient,
   ): Promise<void> {
     const modifier = new DailyNoteModifier(profile.dailyMemoHeader);
-    const { dailyMemosByDay, cutoffTimestamp } = await paginator.collect();
+    const { dailyMemosByDay, rawMemosByDay, cutoffTimestamp } = await paginator.collect();
 
     // A day whose memos were all deleted remotely never appears in
     // dailyMemosByDay (there's nothing fetched for it), so without this it
@@ -91,6 +94,11 @@ export class DailyNoteManager {
       }
     }
 
+    let pushed = 0, pushFailed = 0;
+    // Work off a copy so a mid-loop failure can't partially persist this
+    // profile's baseline - saved once, after every day's push pass runs.
+    const baseline = { ...(this.settings.checkboxBaselines[profile.id] ?? {}) };
+
     for (const [dateStr, memos] of Object.entries(dailyMemosByDay)) {
       try {
         const momentDay = moment(dateStr);
@@ -104,6 +112,15 @@ export class DailyNoteManager {
           continue;
         }
 
+        if (profile.enableBidirectionalSync) {
+          await this.pushCheckboxChanges(
+            client, dailyNote, dateStr, profile, rawMemosByDay[dateStr] ?? {}, baseline,
+          ).then(result => {
+            pushed += result.pushed;
+            pushFailed += result.failed;
+          });
+        }
+
         await this.app.vault.process(dailyNote, currentContent =>
           modifier.modifyDailyNote(currentContent, dateStr, memos) ?? currentContent
         );
@@ -111,6 +128,49 @@ export class DailyNoteManager {
         console.error(`Failed to process memos for ${dateStr}:`, error);
       }
     }
+
+    if (profile.enableBidirectionalSync) {
+      this.settings.checkboxBaselines[profile.id] = baseline;
+      await this.state.saveSettings();
+      if (pushFailed > 0) {
+        console.warn(`Checkbox push for "${profile.name}": ${pushed} pushed, ${pushFailed} failed - failures will retry next sync.`);
+      }
+    }
+  }
+
+  /**
+   * Diff this day's local checkbox states against the freshly-fetched
+   * remote memos and push any local changes back to the server. Mutates
+   * `baseline` in place with the result. Must run before the pull/merge
+   * step below, against content as it stood before that merge, or a
+   * remote-side change and a local toggle in the same sync would look
+   * identical.
+   */
+  private async pushCheckboxChanges(
+    client: APIClient,
+    dailyNote: TFile,
+    dateStr: string,
+    profile: MemosProfile,
+    rawMemosForDay: Record<string, Memo>,
+    baseline: Record<string, boolean>,
+  ): Promise<{ pushed: number; failed: number }> {
+    const currentContent = await this.app.vault.read(dailyNote);
+    const section = findHeaderSection(currentContent, profile.dailyMemoHeader);
+    if (!section) return { pushed: 0, failed: 0 };
+
+    const localBlocks = parseExistingMemoBlocks(section.localRecordContent);
+    const plan = planCheckboxPushes(localBlocks, rawMemosForDay, baseline);
+    const result = await executeCheckboxPushes(client, plan, baseline);
+
+    // result.updatedBaseline is always a superset of the baseline passed in
+    // (executeCheckboxPushes only adds/overwrites entries, never removes),
+    // so this is safe to assign wholesale.
+    Object.assign(baseline, result.updatedBaseline);
+
+    if (result.failed > 0) {
+      console.warn(`${result.failed} checkbox push(es) failed for ${dateStr} ("${profile.name}") - will retry next sync.`);
+    }
+    return { pushed: result.pushed, failed: result.failed };
   }
 
   private async getOrCreateDailyNote(momentDay: MomentInstance): Promise<TFile | null> {

@@ -63,6 +63,8 @@ export const enTranslations: Translations = {
   SKIP_IMAGES_DESC: 'Exclude image resources when syncing to avoid polluting your vault',
   SYNC_DAYS_LIMIT_NAME: 'Sync Days Limit',
   SYNC_DAYS_LIMIT_DESC: 'Only sync memos from the last N days (0 = no limit)',
+  PROFILE_BIDIRECTIONAL_SYNC_LABEL: 'Push checkbox changes back',
+  PROFILE_BIDIRECTIONAL_SYNC_DESC: 'When you check off an item in this daily note, push that change back to this Memos server. Off by default: unlike the rest of this plugin, this writes to your server.',
 
   // Auto sync settings
   AUTO_SYNC_STARTUP_NAME: 'Enable Auto Sync on Startup',
@@ -90,6 +92,7 @@ export const enTranslations: Translations = {
   // Error messages
   NETWORK_ERROR: 'Network error: Unable to connect to',
   FETCH_MEMOS_ERROR: 'Unable to fetch memos',
+  UPDATE_MEMO_ERROR: 'Unable to update memo',
   VIEW_ERROR_LOG: 'View sync error log',
   VIEW_ERROR_LOG_EMPTY: 'No errors logged yet.',
 

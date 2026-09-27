@@ -65,4 +65,46 @@ export class MemosAPIClient implements APIClient {
       nextPageToken: data.nextPageToken ?? '',
     };
   }
+
+  /**
+   * Partial update of a memo's content only, via `updateMask=content`.
+   * `name` is the memo's resource name as returned by the API, e.g.
+   * "memos/M2ew8kwGFWkdVC7iL6KEjJ" - verified against a live server
+   * (memos v0.30+): PATCH /api/v1/{name}?updateMask=content.
+   */
+  async updateMemoContent(name: string, content: string): Promise<Memo> {
+    const url = `${this.baseURL}/api/v1/${name}?updateMask=content`;
+
+    let response: RequestUrlResponse;
+    try {
+      response = await requestUrl({
+        url,
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${this.token}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content }),
+        throw: false,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${t.t('NETWORK_ERROR')} ${url}. ${message}`);
+    }
+
+    if (response.status < 200 || response.status >= 300) {
+      const body = response.text || '';
+      console.error(`API request failed: ${response.status}`, body);
+      const summary = body.replace(/\s+/g, ' ').trim().slice(0, 200);
+      const detail = summary ? ` ${summary}${body.length > 200 ? '…' : ''}` : '';
+      throw new Error(`${t.t('UPDATE_MEMO_ERROR')}: HTTP ${response.status}${detail}`);
+    }
+
+    const data = response.json as Memo | null;
+    if (!data) {
+      throw new Error(`${t.t('UPDATE_MEMO_ERROR')}: empty response body`);
+    }
+    return data;
+  }
 }
