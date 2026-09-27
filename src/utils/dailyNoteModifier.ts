@@ -67,31 +67,39 @@ export function parseExistingMemoBlocks(localRecordContent: string): Map<string,
 export class DailyNoteModifier {
   private dailyMemosHeader: string;
 
-  /**
-   * @param preserveLocalCheckboxState  When true (the default, and the only
-   *   option before bidirectional sync existed), a remote checkbox change
-   *   is always overridden by whatever the local note currently shows,
-   *   matched by text - the only thing stopping a stale pull from
-   *   reverting a check you'd just made, when nothing else is watching for
-   *   local edits. Pass false for profiles with bidirectional sync enabled:
-   *   contentPush.ts already protects a genuine local edit earlier in the
-   *   same sync (and mutates the fetched content to match before this ever
-   *   runs), so by the time this comparison happens, any remaining
-   *   difference is a legitimate remote-side change that should win -
-   *   otherwise a checkbox toggled remotely can never reach the note.
-   */
-  constructor(dailyMemosHeader: string, private preserveLocalCheckboxState = true) {
+  constructor(dailyMemosHeader: string) {
     this.dailyMemosHeader = dailyMemosHeader;
   }
 
   /**
    * Modify daily note content with fetched memos
    * Uses smart incremental update strategy to minimize file changes
+   *
+   * @param trustRemoteTimestamps  Memo timestamps (as string keys, matching
+   *   `fetchedRecordList`) for which remote should simply overwrite local
+   *   outright, checkbox included, instead of the default of always
+   *   re-imposing whatever checkbox state the local note currently shows
+   *   (matched by text - the only thing stopping a stale pull from
+   *   reverting a check you'd just made, when nothing else is watching for
+   *   local edits).
+   *
+   *   Bidirectional sync (contentPush.ts) passes exactly the timestamps it
+   *   was able to reason about this sync - it already protected any
+   *   genuine local edit among them earlier in the same sync (and mutated
+   *   the fetched content to match before this ever runs), so for those,
+   *   any remaining difference here is a legitimate remote-side change
+   *   that should win. Deliberately per-timestamp, not per-profile:
+   *   contentPush only ever handles single-line, attachment-free memos
+   *   (see memoReverseTransform.ts) - anything outside that still needs
+   *   the default text-preservation behaviour, or a checkbox on e.g. a
+   *   multi-line memo would lose the only protection it has, with nothing
+   *   to replace it (contentPush can't push it back either).
    */
   modifyDailyNote(
     originFileContent: string,
     today: string,
     fetchedRecordList: Record<string, string>,
+    trustRemoteTimestamps: ReadonlySet<string> = new Set(),
   ): string | undefined {
     const header = this.dailyMemosHeader;
     const section = findHeaderSection(originFileContent, header);
@@ -120,20 +128,22 @@ export class DailyNoteModifier {
       if (existingContent !== undefined) {
         const remoteContent = content;
 
+        const trustRemote = trustRemoteTimestamps.has(timestamp);
+
         // Check if contents are the same except for todo states
         if (isSameExceptTodoStates(existingContent, remoteContent)) {
-          const mergedContent = this.preserveLocalCheckboxState
-            ? mergeTodoStates(existingContent, remoteContent)
-            : remoteContent;
+          const mergedContent = trustRemote
+            ? remoteContent
+            : mergeTodoStates(existingContent, remoteContent);
           if (mergedContent !== existingContent) {
             updates.set(timestamp, mergedContent);
           }
           // If merged content is same as existing, no update needed
         } else if (existingContent !== remoteContent) {
           // Content has changed beyond just todo states
-          const mergedContent = this.preserveLocalCheckboxState
-            ? mergeTodoStates(existingContent, remoteContent)
-            : remoteContent;
+          const mergedContent = trustRemote
+            ? remoteContent
+            : mergeTodoStates(existingContent, remoteContent);
           updates.set(timestamp, mergedContent);
         }
         // If contents are exactly the same, no update needed

@@ -78,12 +78,7 @@ export class DailyNoteManager {
     profile: MemosProfile,
     client: APIClient,
   ): Promise<void> {
-    // Bidirectional sync already protects a genuine local checkbox edit
-    // earlier in this same sync (pushContentChanges, above) - so the old
-    // blanket "always keep local's checkbox" merge behaviour would only
-    // fight that, blocking a legitimate remote-side uncheck/check from ever
-    // reaching the note. See DailyNoteModifier's constructor doc.
-    const modifier = new DailyNoteModifier(profile.dailyMemoHeader, !profile.enableBidirectionalSync);
+    const modifier = new DailyNoteModifier(profile.dailyMemoHeader);
     const { dailyMemosByDay, rawMemosByDay, cutoffTimestamp } = await paginator.collect();
 
     // A day whose memos were all deleted remotely never appears in
@@ -125,16 +120,18 @@ export class DailyNoteManager {
           continue;
         }
 
+        let trustRemoteTimestamps = new Set<string>();
         if (profile.enableBidirectionalSync) {
           const result = await this.pushContentChanges(
             client, dailyNote, dateStr, profile, rawMemosByDay[dateStr] ?? {}, memos, baseline, reverseOpts,
           );
           pushed += result.pushed;
           pushFailed += result.failed;
+          trustRemoteTimestamps = result.trustRemoteTimestamps;
         }
 
         await this.app.vault.process(dailyNote, currentContent =>
-          modifier.modifyDailyNote(currentContent, dateStr, memos) ?? currentContent
+          modifier.modifyDailyNote(currentContent, dateStr, memos, trustRemoteTimestamps) ?? currentContent
         );
       } catch (error) {
         console.error(`Failed to process memos for ${dateStr}:`, error);
@@ -172,10 +169,10 @@ export class DailyNoteManager {
     memos: Record<string, string>,
     baseline: Record<string, string>,
     reverseOpts: ReverseTransformOptions,
-  ): Promise<{ pushed: number; failed: number }> {
+  ): Promise<{ pushed: number; failed: number; trustRemoteTimestamps: Set<string> }> {
     const currentContent = await this.app.vault.read(dailyNote);
     const section = findHeaderSection(currentContent, profile.dailyMemoHeader);
-    if (!section) return { pushed: 0, failed: 0 };
+    if (!section) return { pushed: 0, failed: 0, trustRemoteTimestamps: new Set() };
 
     const localBlocks = parseExistingMemoBlocks(section.localRecordContent);
     const plan = planContentPushes(localBlocks, rawMemosForDay, baseline, reverseOpts);
@@ -216,7 +213,17 @@ export class DailyNoteManager {
     if (result.failed > 0) {
       console.warn(`${result.failed} content push(es) failed for ${dateStr} ("${profile.name}") - will retry next sync.`);
     }
-    return { pushed: result.pushed, failed: result.failed };
+
+    // Every timestamp planContentPushes could actually reason about (it
+    // skips anything reverseTransformBlock can't handle - multi-line,
+    // attachments, tampered blocks). For exactly these, the merge step
+    // below should trust remote outright rather than fall back to its
+    // default text-preservation behaviour - see DailyNoteModifier.
+    const trustRemoteTimestamps = new Set([
+      ...plan.baselineUpdates.keys(), ...plan.toPush.keys(), ...plan.conflicts.keys(),
+    ]);
+
+    return { pushed: result.pushed, failed: result.failed, trustRemoteTimestamps };
   }
 
   private async getOrCreateDailyNote(momentDay: MomentInstance): Promise<TFile | null> {

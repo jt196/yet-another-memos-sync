@@ -127,15 +127,29 @@ test('bug: with the old blanket checkbox preservation, a remote-only uncheck nev
   const uncheckedRemote = transformMemoToMarkdown({ timestamp: TS, content: '- [ ] Gout. Medical issue', resources: [] }, false, false, false).content.trim();
   const note = `${header}\n\n${checkedBlock}\n`;
 
-  const oldBehaviour = new DailyNoteModifier(header, true); // preserveLocalCheckboxState (the old, only option)
-  const oldResult = oldBehaviour.modifyDailyNote(note, '2026-01-01', { [String(TS)]: uncheckedRemote });
-  assert.equal(oldResult, undefined); // "no update needed" - the bug: remote's uncheck is silently dropped
+  const modifier = new DailyNoteModifier(header);
+  const defaultResult = modifier.modifyDailyNote(note, '2026-01-01', { [String(TS)]: uncheckedRemote });
+  assert.equal(defaultResult, undefined); // "no update needed" - the bug: remote's uncheck is silently dropped
 
-  const newBehaviour = new DailyNoteModifier(header, false); // bidirectional sync: trust remote here
-  const newResult = newBehaviour.modifyDailyNote(note, '2026-01-01', { [String(TS)]: uncheckedRemote });
-  assert.ok(newResult.includes('- [ ]')); // remote's uncheck now lands locally
-  assert.ok(!newResult.includes('[x]'));
-  assert.ok(newResult.includes('Gout. Medical issue'));
+  // Passing this timestamp in trustRemoteTimestamps (what contentPush.ts
+  // computes once it's successfully reasoned about an item) is what fixes it.
+  const trustedResult = modifier.modifyDailyNote(note, '2026-01-01', { [String(TS)]: uncheckedRemote }, new Set([String(TS)]));
+  assert.ok(trustedResult.includes('- [ ]')); // remote's uncheck now lands locally
+  assert.ok(!trustedResult.includes('[x]'));
+  assert.ok(trustedResult.includes('Gout. Medical issue'));
+});
+
+test('a timestamp NOT in trustRemoteTimestamps still gets the old text-preservation safety net (e.g. multi-line memos contentPush cannot reach)', () => {
+  const header = '## Memos';
+  const checkedBlock = blockFor('- [x] Gout. Medical issue');
+  const uncheckedRemote = transformMemoToMarkdown({ timestamp: TS, content: '- [ ] Gout. Medical issue', resources: [] }, false, false, false).content.trim();
+  const note = `${header}\n\n${checkedBlock}\n`;
+
+  const modifier = new DailyNoteModifier(header);
+  // Empty trustRemoteTimestamps (the default) - as if contentPush.ts skipped
+  // this item entirely (multi-line/attachments/unparseable).
+  const result = modifier.modifyDailyNote(note, '2026-01-01', { [String(TS)]: uncheckedRemote }, new Set());
+  assert.equal(result, undefined); // local's checked state is preserved, exactly as before this feature existed
 });
 
 test('parseExistingMemoBlocks + planContentPushes work together against a real daily-note section', () => {
