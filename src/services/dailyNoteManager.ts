@@ -78,7 +78,12 @@ export class DailyNoteManager {
     profile: MemosProfile,
     client: APIClient,
   ): Promise<void> {
-    const modifier = new DailyNoteModifier(profile.dailyMemoHeader);
+    // Bidirectional sync already protects a genuine local checkbox edit
+    // earlier in this same sync (pushContentChanges, above) - so the old
+    // blanket "always keep local's checkbox" merge behaviour would only
+    // fight that, blocking a legitimate remote-side uncheck/check from ever
+    // reaching the note. See DailyNoteModifier's constructor doc.
+    const modifier = new DailyNoteModifier(profile.dailyMemoHeader, !profile.enableBidirectionalSync);
     const { dailyMemosByDay, rawMemosByDay, cutoffTimestamp } = await paginator.collect();
 
     // A day whose memos were all deleted remotely never appears in

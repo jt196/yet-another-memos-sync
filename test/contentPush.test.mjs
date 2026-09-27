@@ -13,7 +13,7 @@ function load(file) {
 }
 
 const { planContentPushes, executeContentPushes, hashContent } = load('src/utils/contentPush.ts');
-const { parseExistingMemoBlocks } = load('src/utils/dailyNoteModifier.ts');
+const { parseExistingMemoBlocks, DailyNoteModifier } = load('src/utils/dailyNoteModifier.ts');
 const { transformMemoToMarkdown } = load('src/utils/memoTransformer.ts');
 
 const TS = 1726221600;
@@ -114,6 +114,28 @@ test('a failed push leaves the baseline untouched so it retries next sync', asyn
   assert.equal(result.pushed, 0);
   assert.equal(result.failed, 1);
   assert.equal(result.updatedBaseline[TS], hashContent('hello')); // unchanged
+});
+
+test('bug: with the old blanket checkbox preservation, a remote-only uncheck never reaches the note', () => {
+  // Reproduces the exact scenario reported live: local was checked (and
+  // matches baseline - the user made no local edit this sync), the memo
+  // was then unchecked on the server, but the note stayed checked forever
+  // because mergeTodoStates always re-imposed local's checkbox by text
+  // match, regardless of which side actually changed.
+  const header = '## Memos';
+  const checkedBlock = blockFor('- [x] Gout. Medical issue');
+  const uncheckedRemote = transformMemoToMarkdown({ timestamp: TS, content: '- [ ] Gout. Medical issue', resources: [] }, false, false, false).content.trim();
+  const note = `${header}\n\n${checkedBlock}\n`;
+
+  const oldBehaviour = new DailyNoteModifier(header, true); // preserveLocalCheckboxState (the old, only option)
+  const oldResult = oldBehaviour.modifyDailyNote(note, '2026-01-01', { [String(TS)]: uncheckedRemote });
+  assert.equal(oldResult, undefined); // "no update needed" - the bug: remote's uncheck is silently dropped
+
+  const newBehaviour = new DailyNoteModifier(header, false); // bidirectional sync: trust remote here
+  const newResult = newBehaviour.modifyDailyNote(note, '2026-01-01', { [String(TS)]: uncheckedRemote });
+  assert.ok(newResult.includes('- [ ]')); // remote's uncheck now lands locally
+  assert.ok(!newResult.includes('[x]'));
+  assert.ok(newResult.includes('Gout. Medical issue'));
 });
 
 test('parseExistingMemoBlocks + planContentPushes work together against a real daily-note section', () => {

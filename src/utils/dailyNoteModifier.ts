@@ -67,7 +67,20 @@ export function parseExistingMemoBlocks(localRecordContent: string): Map<string,
 export class DailyNoteModifier {
   private dailyMemosHeader: string;
 
-  constructor(dailyMemosHeader: string) {
+  /**
+   * @param preserveLocalCheckboxState  When true (the default, and the only
+   *   option before bidirectional sync existed), a remote checkbox change
+   *   is always overridden by whatever the local note currently shows,
+   *   matched by text - the only thing stopping a stale pull from
+   *   reverting a check you'd just made, when nothing else is watching for
+   *   local edits. Pass false for profiles with bidirectional sync enabled:
+   *   contentPush.ts already protects a genuine local edit earlier in the
+   *   same sync (and mutates the fetched content to match before this ever
+   *   runs), so by the time this comparison happens, any remaining
+   *   difference is a legitimate remote-side change that should win -
+   *   otherwise a checkbox toggled remotely can never reach the note.
+   */
+  constructor(dailyMemosHeader: string, private preserveLocalCheckboxState = true) {
     this.dailyMemosHeader = dailyMemosHeader;
   }
 
@@ -109,16 +122,18 @@ export class DailyNoteModifier {
 
         // Check if contents are the same except for todo states
         if (isSameExceptTodoStates(existingContent, remoteContent)) {
-          // Merge todo states: preserve local completion status
-          const mergedContent = mergeTodoStates(existingContent, remoteContent);
+          const mergedContent = this.preserveLocalCheckboxState
+            ? mergeTodoStates(existingContent, remoteContent)
+            : remoteContent;
           if (mergedContent !== existingContent) {
             updates.set(timestamp, mergedContent);
           }
           // If merged content is same as existing, no update needed
         } else if (existingContent !== remoteContent) {
           // Content has changed beyond just todo states
-          // Still merge todo states but update the content
-          const mergedContent = mergeTodoStates(existingContent, remoteContent);
+          const mergedContent = this.preserveLocalCheckboxState
+            ? mergeTodoStates(existingContent, remoteContent)
+            : remoteContent;
           updates.set(timestamp, mergedContent);
         }
         // If contents are exactly the same, no update needed
